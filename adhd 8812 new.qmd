@@ -1,0 +1,498 @@
+---
+title: "adhd 8812 1"
+format: html
+editor: visual
+---
+
+ADHD
+
+```{r}
+packages <- c(
+  "readxl", "dplyr", "tidyr", "stringr",
+  "lavaan", "semTools", "psych", "broom"
+)
+
+to_install <- packages[!packages %in% rownames(installed.packages())]
+if(length(to_install) > 0) install.packages(to_install)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lavaan)
+library(semTools)
+library(psych)
+library(broom)
+
+data_path <- "/Users/yangsiyutong/Desktop/adhd 8812/QuestionPro-SR-RawData-4077617-04-12-2026-T094743.646.xlsx"
+
+raw <- read_excel(
+  data_path,
+  sheet = "原始数据",
+  .name_repair = "minimal"
+)
+
+dat <- tibble(
+  id = raw[[1]],
+  sex = raw[[10]],
+  age = raw[[11]],
+  
+  multi_partner = raw[[12]],
+  
+  mate1 = raw[[25]],
+  mate2 = raw[[26]],
+  mate3 = raw[[27]],
+  mate4 = raw[[28]],
+  mate5 = raw[[29]],
+  
+  adhd1  = raw[[33]],
+  adhd2  = raw[[34]],
+  adhd3  = raw[[35]],
+  adhd4  = raw[[36]],
+  adhd5  = raw[[37]],
+  adhd6  = raw[[38]],
+  adhd7  = raw[[39]],
+  adhd8  = raw[[40]],
+  adhd9  = raw[[41]],
+  adhd10 = raw[[42]],
+  adhd11 = raw[[43]],
+  adhd12 = raw[[44]],
+  adhd13 = raw[[45]],
+  adhd14 = raw[[46]],
+  adhd15 = raw[[47]],
+  adhd16 = raw[[48]],
+  adhd17 = raw[[49]],
+  adhd18 = raw[[50]]
+)
+
+adhd_map <- c(
+  "从不" = 1,
+  "很少" = 2,
+  "有时" = 3,
+  "经常" = 4,
+  "非常经常" = 5
+)
+
+recode_adhd <- function(x){
+  x <- str_squish(as.character(x))
+  x_num <- suppressWarnings(as.numeric(x))
+  x_lab <- as.numeric(unname(adhd_map[x]))
+  ifelse(!is.na(x_num), x_num, x_lab)
+}
+
+recode_inter <- function(x){
+  x <- str_squish(as.character(x))
+  case_when(
+    str_detect(x, "^B") ~ 1,
+    str_detect(x, "^A") ~ 0,
+    TRUE ~ NA_real_
+  )
+}
+
+row_mean_min <- function(data, vars, min_items = 1){
+  x <- data[, vars] %>%
+    mutate(across(everything(), as.numeric)) %>%
+    as.matrix()
+  
+  valid_n <- rowSums(!is.na(x))
+  out <- rowMeans(x, na.rm = TRUE)
+  out[valid_n < min_items] <- NA_real_
+  out
+}
+
+adhd_items <- paste0("adhd", 1:18)
+
+inatt_items <- c(
+  "adhd1", "adhd2", "adhd3", "adhd4",
+  "adhd7", "adhd8", "adhd9", "adhd10", "adhd11"
+)
+
+hyper_items <- c(
+  "adhd5", "adhd6",
+  "adhd12", "adhd13", "adhd14", "adhd15",
+  "adhd16", "adhd17", "adhd18"
+)
+
+inter_items <- paste0("inter", 1:5)
+intra_items <- paste0("intra", 1:5)
+
+dat <- dat %>%
+  mutate(
+    across(all_of(adhd_items), recode_adhd),
+    
+    inter1 = recode_inter(mate1),
+    inter2 = recode_inter(mate2),
+    inter3 = recode_inter(mate3),
+    inter4 = recode_inter(mate4),
+    inter5 = recode_inter(mate5),
+    
+    intra1 = 1 - inter1,
+    intra2 = 1 - inter2,
+    intra3 = 1 - inter3,
+    intra4 = 1 - inter4,
+    intra5 = 1 - inter5
+  )
+
+dat <- dat %>%
+  mutate(
+    adhd_total = row_mean_min(., adhd_items, min_items = 14),
+    adhd_inattention = row_mean_min(., inatt_items, min_items = 7),
+    adhd_hyperimpulsive = row_mean_min(., hyper_items, min_items = 7),
+    
+    inter_score = row_mean_min(., inter_items, min_items = 3),
+    intra_score = row_mean_min(., intra_items, min_items = 3),
+    
+    inter_majority = if_else(inter_score >= 0.60, 1, 0, missing = NA_real_),
+    intra_majority = if_else(intra_score >= 0.60, 1, 0, missing = NA_real_)
+  )
+
+str(dat[, adhd_items])
+
+summary(dat$adhd_total)
+summary(dat$inter_score)
+summary(dat$intra_score)
+
+table(dat$inter_majority, useNA = "ifany")
+table(dat$intra_majority, useNA = "ifany")
+```
+
+##CFA model: ADHD as a latent variable
+
+```{r}
+dat_cfa <- dat %>%
+  select(all_of(adhd_items)) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+adhd_cfa_total <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + ")
+)
+
+fit_cfa_total <- cfa(
+  adhd_cfa_total,
+  data = dat_cfa,
+  ordered = adhd_items,
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_cfa_total,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+fitMeasures(
+  fit_cfa_total,
+  c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "srmr")
+)
+
+semTools::reliability(fit_cfa_total)
+```
+
+Structural model: latent ADHD predicting intersexual-display binary outcome
+
+```{r}
+dat_sem_inter <- dat %>%
+  select(all_of(adhd_items), inter_majority) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+sem_inter_model <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + "),
+  "\ninter_majority ~ ADHD"
+)
+
+fit_sem_inter <- sem(
+  sem_inter_model,
+  data = dat_sem_inter,
+  ordered = c(adhd_items, "inter_majority"),
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_sem_inter,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+parameterEstimates(
+  fit_sem_inter,
+  standardized = TRUE,
+  ci = TRUE
+) %>%
+  filter(op == "~")
+```
+
+Structural model: latent ADHD predicting intrasexual-competition binary outcome
+
+```{r}
+dat_sem_intra <- dat %>%
+  select(all_of(adhd_items), intra_majority) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+sem_intra_model <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + "),
+  "\nintra_majority ~ ADHD"
+)
+
+fit_sem_intra <- sem(
+  sem_intra_model,
+  data = dat_sem_intra,
+  ordered = c(adhd_items, "intra_majority"),
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_sem_intra,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+parameterEstimates(
+  fit_sem_intra,
+  standardized = TRUE,
+  ci = TRUE
+) %>%
+  filter(op == "~")
+```
+
+Final model: ADHD total score predicting inter/intra binary outcome
+
+```{r}
+dat_logit <- dat %>%
+  select(adhd_total, adhd_inattention, adhd_hyperimpulsive, inter_majority, intra_majority) %>%
+  drop_na()
+
+m_inter_total <- glm(
+  inter_majority ~ scale(adhd_total),
+  data = dat_logit,
+  family = binomial(link = "logit")
+)
+
+summary(m_inter_total)
+
+tidy(
+  m_inter_total,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+```
+
+R chart
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom)
+
+dat_logit <- dat %>%
+  select(adhd_total, inter_majority, intra_majority) %>%
+  drop_na()
+
+adhd_mean <- mean(dat_logit$adhd_total, na.rm = TRUE)
+adhd_sd <- sd(dat_logit$adhd_total, na.rm = TRUE)
+
+dat_logit <- dat_logit %>%
+  mutate(
+    adhd_z = (adhd_total - adhd_mean) / adhd_sd
+  )
+
+m_inter_total <- glm(
+  inter_majority ~ adhd_z,
+  data = dat_logit,
+  family = binomial(link = "logit")
+)
+
+summary(m_inter_total)
+
+tidy(
+  m_inter_total,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+
+pred_data <- tibble(
+  adhd_total = seq(
+    min(dat_logit$adhd_total, na.rm = TRUE),
+    max(dat_logit$adhd_total, na.rm = TRUE),
+    length.out = 100
+  )
+) %>%
+  mutate(
+    adhd_z = (adhd_total - adhd_mean) / adhd_sd
+  )
+
+pred_link <- predict(
+  m_inter_total,
+  newdata = pred_data,
+  type = "link",
+  se.fit = TRUE
+)
+
+pred_data <- pred_data %>%
+  mutate(
+    fit_link = pred_link$fit,
+    se_link = pred_link$se.fit,
+    predicted_probability = plogis(fit_link),
+    lower = plogis(fit_link - 1.96 * se_link),
+    upper = plogis(fit_link + 1.96 * se_link)
+  )
+
+ggplot(pred_data, aes(x = adhd_total, y = predicted_probability)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.20) +
+  geom_line(linewidth = 1.2) +
+  geom_jitter(
+    data = dat_logit,
+    aes(x = adhd_total, y = inter_majority),
+    height = 0.05,
+    width = 0.03,
+    alpha = 0.25,
+    inherit.aes = FALSE
+  ) +
+  labs(
+    title = "ADHD Total Score Predicting Intersexual / Ornament-like Choice",
+    x = "ADHD Total Score",
+    y = "Predicted Probability of Intersexual / Ornament-like Choice"
+  ) +
+  theme_minimal()
+```
+
+Lower ADHD/Higher ADHD
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+library(broom)
+
+dat_group <- dat %>%
+  select(adhd_total, inter_majority, intra_majority) %>%
+  drop_na()
+
+adhd_cutoff <- median(dat_group$adhd_total, na.rm = TRUE)
+
+dat_group <- dat_group %>%
+  mutate(
+    adhd_group = if_else(
+      adhd_total >= adhd_cutoff,
+      "ADHD / higher ADHD traits",
+      "Non-ADHD / lower ADHD traits"
+    )
+  )
+
+comparison_table <- dat_group %>%
+  group_by(adhd_group) %>%
+  summarise(
+    n = n(),
+    mean_adhd_total = mean(adhd_total, na.rm = TRUE),
+    sd_adhd_total = sd(adhd_total, na.rm = TRUE),
+    intersexual_n = sum(inter_majority == 1, na.rm = TRUE),
+    intersexual_percent = mean(inter_majority == 1, na.rm = TRUE) * 100,
+    intrasexual_n = sum(intra_majority == 1, na.rm = TRUE),
+    intrasexual_percent = mean(intra_majority == 1, na.rm = TRUE) * 100
+  )
+
+comparison_table
+```
+
+bar chart
+
+```{r}
+ggplot(
+  comparison_table,
+  aes(x = adhd_group, y = intersexual_percent)
+) +
+  geom_col(width = 0.65) +
+  geom_text(
+    aes(label = paste0(round(intersexual_percent, 1), "%")),
+    vjust = -0.4,
+    size = 4
+  ) +
+  labs(
+    title = "Intersexual / Ornament-like Choice by ADHD Group",
+    x = "ADHD Group",
+    y = "Percentage choosing intersexual / ornament-like option"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    labels = function(x) paste0(x, "%")
+  ) +
+  theme_minimal()
+```
+
+both inter+intra
+
+```{r}
+plot_table <- comparison_table %>%
+  select(
+    adhd_group,
+    intersexual_percent,
+    intrasexual_percent
+  ) %>%
+  pivot_longer(
+    cols = c(intersexual_percent, intrasexual_percent),
+    names_to = "choice_type",
+    values_to = "percent"
+  ) %>%
+  mutate(
+    choice_type = recode(
+      choice_type,
+      intersexual_percent = "Intersexual / ornament-like choice",
+      intrasexual_percent = "Intrasexual competition choice"
+    )
+  )
+
+ggplot(
+  plot_table,
+  aes(x = adhd_group, y = percent, fill = choice_type)
+) +
+  geom_col(
+    position = position_dodge(width = 0.75),
+    width = 0.65
+  ) +
+  geom_text(
+    aes(label = paste0(round(percent, 1), "%")),
+    position = position_dodge(width = 0.75),
+    vjust = -0.4,
+    size = 3.8
+  ) +
+  labs(
+    title = "Mating Choice Type by ADHD Group",
+    x = "ADHD Group",
+    y = "Percentage of participants",
+    fill = "Choice type"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    labels = function(x) paste0(x, "%")
+  ) +
+  theme_minimal()
+```
+
+```{r}
+m_inter_total <- glm(
+  inter_majority ~ scale(adhd_total),
+  data = dat_group,
+  family = binomial(link = "logit")
+)
+
+model_table <- tidy(
+  m_inter_total,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+
+model_table
+```
