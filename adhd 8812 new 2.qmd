@@ -1,0 +1,731 @@
+---
+title: "adhd 8812 1"
+format: html
+editor: visual
+---
+
+ADHD
+
+```{r}
+packages <- c(
+  "readxl", "dplyr", "tidyr", "stringr",
+  "lavaan", "semTools", "psych", "broom"
+)
+
+to_install <- packages[!packages %in% rownames(installed.packages())]
+if(length(to_install) > 0) install.packages(to_install)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lavaan)
+library(semTools)
+library(psych)
+library(broom)
+library(dplyr)
+
+data_path <- "/Users/yangsiyutong/Desktop/QuestionPro-SR-RawData-4077617-04-12-2026-T094743.646.xlsx"
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE
+)
+
+raw <- read_excel(
+  data_path,
+  sheet = "原始数据",
+  .name_repair = "minimal"
+)
+
+dat <- tibble(
+  id = raw[[1]],
+  sex = raw[[10]],
+  age = raw[[11]],
+  
+  multi_partner = raw[[12]],
+  
+  mate1 = raw[[25]],
+  mate2 = raw[[26]],
+  mate3 = raw[[27]],
+  mate4 = raw[[28]],
+  mate5 = raw[[29]],
+  
+  adhd1  = raw[[33]],
+  adhd2  = raw[[34]],
+  adhd3  = raw[[35]],
+  adhd4  = raw[[36]],
+  adhd5  = raw[[37]],
+  adhd6  = raw[[38]],
+  adhd7  = raw[[39]],
+  adhd8  = raw[[40]],
+  adhd9  = raw[[41]],
+  adhd10 = raw[[42]],
+  adhd11 = raw[[43]],
+  adhd12 = raw[[44]],
+  adhd13 = raw[[45]],
+  adhd14 = raw[[46]],
+  adhd15 = raw[[47]],
+  adhd16 = raw[[48]],
+  adhd17 = raw[[49]],
+  adhd18 = raw[[50]]
+)
+
+adhd_map <- c(
+  "从不" = 1,
+  "很少" = 2,
+  "有时" = 3,
+  "经常" = 4,
+  "非常经常" = 5
+)
+
+recode_adhd <- function(x){
+  x <- str_squish(as.character(x))
+  x_num <- suppressWarnings(as.numeric(x))
+  x_lab <- as.numeric(unname(adhd_map[x]))
+  ifelse(!is.na(x_num), x_num, x_lab)
+}
+
+recode_inter <- function(x){
+  x <- str_squish(as.character(x))
+  case_when(
+    str_detect(x, "^B") ~ 1,
+    str_detect(x, "^A") ~ 0,
+    TRUE ~ NA_real_
+  )
+}
+
+row_mean_min <- function(data, vars, min_items = 1){
+  x <- data[, vars] %>%
+    mutate(across(everything(), as.numeric)) %>%
+    as.matrix()
+  
+  valid_n <- rowSums(!is.na(x))
+  out <- rowMeans(x, na.rm = TRUE)
+  out[valid_n < min_items] <- NA_real_
+  out
+}
+
+adhd_items <- paste0("adhd", 1:18)
+
+inatt_items <- c(
+  "adhd1", "adhd2", "adhd3", "adhd4",
+  "adhd7", "adhd8", "adhd9", "adhd10", "adhd11"
+)
+
+hyper_items <- c(
+  "adhd5", "adhd6",
+  "adhd12", "adhd13", "adhd14", "adhd15",
+  "adhd16", "adhd17", "adhd18"
+)
+
+inter_items <- paste0("inter", 1:5)
+intra_items <- paste0("intra", 1:5)
+
+dat <- dat %>%
+  mutate(
+    across(all_of(adhd_items), recode_adhd),
+    
+    inter1 = recode_inter(mate1),
+    inter2 = recode_inter(mate2),
+    inter3 = recode_inter(mate3),
+    inter4 = recode_inter(mate4),
+    inter5 = recode_inter(mate5),
+    
+    intra1 = 1 - inter1,
+    intra2 = 1 - inter2,
+    intra3 = 1 - inter3,
+    intra4 = 1 - inter4,
+    intra5 = 1 - inter5
+  )
+
+dat <- dat %>%
+  mutate(
+    adhd_total = row_mean_min(., adhd_items, min_items = 14),
+    adhd_inattention = row_mean_min(., inatt_items, min_items = 7),
+    adhd_hyperimpulsive = row_mean_min(., hyper_items, min_items = 7),
+    
+    inter_score = row_mean_min(., inter_items, min_items = 3),
+    intra_score = row_mean_min(., intra_items, min_items = 3),
+    
+    inter_majority = if_else(inter_score >= 0.60, 1, 0, missing = NA_real_),
+    intra_majority = if_else(intra_score >= 0.60, 1, 0, missing = NA_real_)
+  )
+
+str(dat[, adhd_items])
+
+summary(dat$adhd_total)
+summary(dat$inter_score)
+summary(dat$intra_score)
+
+table(dat$inter_majority, useNA = "ifany")
+table(dat$intra_majority, useNA = "ifany")
+```
+
+##CFA model: ADHD as a latent variable
+
+```{r}
+dat_cfa <- dat %>%
+  select(all_of(adhd_items)) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+adhd_cfa_total <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + ")
+)
+
+fit_cfa_total <- cfa(
+  adhd_cfa_total,
+  data = dat_cfa,
+  ordered = adhd_items,
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_cfa_total,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+fitMeasures(
+  fit_cfa_total,
+  c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "srmr")
+)
+
+semTools::reliability(fit_cfa_total)
+```
+
+Structural model: latent ADHD predicting intersexual-display binary outcome
+
+```{r}
+dat_sem_inter <- dat %>%
+  select(all_of(adhd_items), inter_majority) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+sem_inter_model <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + "),
+  "\ninter_majority ~ ADHD"
+)
+
+fit_sem_inter <- sem(
+  sem_inter_model,
+  data = dat_sem_inter,
+  ordered = c(adhd_items, "inter_majority"),
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_sem_inter,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+parameterEstimates(
+  fit_sem_inter,
+  standardized = TRUE,
+  ci = TRUE
+) %>%
+  filter(op == "~")
+```
+
+Structural model: latent ADHD predicting intrasexual-competition binary outcome
+
+```{r}
+dat_sem_intra <- dat %>%
+  select(all_of(adhd_items), intra_majority) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+sem_intra_model <- paste0(
+  "ADHD =~ ",
+  paste(adhd_items, collapse = " + "),
+  "\nintra_majority ~ ADHD"
+)
+
+fit_sem_intra <- sem(
+  sem_intra_model,
+  data = dat_sem_intra,
+  ordered = c(adhd_items, "intra_majority"),
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+summary(
+  fit_sem_intra,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+
+parameterEstimates(
+  fit_sem_intra,
+  standardized = TRUE,
+  ci = TRUE
+) %>%
+  filter(op == "~")
+```
+
+
+
+```{r}
+# Function: row mean with minimum number of valid items
+row_mean_min <- function(data, cols, min_items = 1) {
+  x <- data[, cols, drop = FALSE]
+  
+  # make sure columns are numeric
+  x <- as.data.frame(lapply(x, function(v) as.numeric(as.character(v))))
+  
+  n_valid <- rowSums(!is.na(x))
+  out <- rowMeans(x, na.rm = TRUE)
+  
+  out[n_valid < min_items] <- NA_real_
+  out
+}
+# Function: row mean with minimum number of valid items
+row_mean_min <- function(data, cols, min_items = 1) {
+  x <- data[, cols, drop = FALSE]
+  
+  # make sure columns are numeric
+  x <- as.data.frame(lapply(x, function(v) as.numeric(as.character(v))))
+  
+  n_valid <- rowSums(!is.na(x))
+  out <- rowMeans(x, na.rm = TRUE)
+  
+  out[n_valid < min_items] <- NA_real_
+  out
+}
+```
+
+
+
+```{r}
+library(dplyr)
+
+# Final analysis dataset: complete-case sample for paper
+# This forces the logistic regression, CFA, reliability, and group comparison
+# to use the same ADHD item-level complete-case sample.
+
+dat_paper <- dat %>%
+  filter(
+    if_all(all_of(adhd_items), ~ !is.na(.x)),
+    !is.na(inter_majority)
+  ) %>%
+  mutate(
+    adhd_total = rowMeans(across(all_of(adhd_items)), na.rm = FALSE),
+    adhd_inattention = rowMeans(across(all_of(inatt_items)), na.rm = FALSE),
+    adhd_hyperimpulsive = rowMeans(across(all_of(hyper_items)), na.rm = FALSE)
+  )
+
+# Check final sample
+n_raw <- nrow(dat)
+n_final <- nrow(dat_paper)
+n_removed <- n_raw - n_final
+
+n_final
+
+```
+
+```{r}
+age_midpoint <- function(x) {
+  x <- as.character(x)
+  nums <- stringr::str_extract_all(x, "\\d+")
+  
+  purrr::map_dbl(nums, function(z) {
+    z <- as.numeric(z)
+    
+    if (length(z) >= 2) {
+      mean(z[1:2])
+    } else if (length(z) == 1) {
+      z[1]
+    } else {
+      NA_real_
+    }
+  })
+}
+
+dat_paper <- dat_paper %>%
+  mutate(age_mid = age_midpoint(age))
+
+age_table <- dat_paper %>%
+  count(age, name = "n") %>%
+  mutate(percent = round(100 * n / sum(n), 2))
+
+knitr::kable(
+  age_table,
+  caption = "Age category distribution"
+)
+
+age_summary <- dat_paper %>%
+  summarise(
+    n_age = sum(!is.na(age_mid)),
+    mean_age = mean(age_mid, na.rm = TRUE),
+    sd_age = sd(age_mid, na.rm = TRUE),
+    min_age = min(age_mid, na.rm = TRUE),
+    max_age = max(age_mid, na.rm = TRUE)
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+knitr::kable(
+  age_summary,
+  caption = "Approximate age summary using category midpoints"
+)
+```
+
+##ADHD reliability: alpha and omega
+```{r}
+#| message: false
+#| warning: false
+
+# Reset item names to match your current dataset
+adhd_items <- paste0("adhd", 1:18)
+
+inatt_items <- c(
+  "adhd1", "adhd2", "adhd3", "adhd4",
+  "adhd7", "adhd8", "adhd9", "adhd10", "adhd11"
+)
+
+hyper_items <- c(
+  "adhd5", "adhd6",
+  "adhd12", "adhd13", "adhd14", "adhd15",
+  "adhd16", "adhd17", "adhd18"
+)
+
+# Check that the columns exist
+stopifnot(all(adhd_items %in% names(dat_paper)))
+stopifnot(all(inatt_items %in% names(dat_paper)))
+stopifnot(all(hyper_items %in% names(dat_paper)))
+
+# Reliability dataset
+adhd_reliability_dat <- dat_paper %>%
+  select(all_of(adhd_items)) %>%
+  drop_na()
+
+# Cronbach's alpha
+alpha_total <- psych::alpha(adhd_reliability_dat)
+alpha_inattention <- psych::alpha(
+  adhd_reliability_dat %>% select(all_of(inatt_items))
+)
+alpha_hyper <- psych::alpha(
+  adhd_reliability_dat %>% select(all_of(hyper_items))
+)
+
+# Omega
+omega_total <- psych::omega(
+  adhd_reliability_dat,
+  nfactors = 2,
+  plot = FALSE
+)
+
+# Clean reliability table
+reliability_table <- tibble(
+  Scale = c(
+    "ADHD total",
+    "Inattention",
+    "Hyperactivity / impulsivity",
+    "ADHD total omega total",
+    "ADHD total omega hierarchical"
+  ),
+  Estimate = c(
+    alpha_total$total$raw_alpha,
+    alpha_inattention$total$raw_alpha,
+    alpha_hyper$total$raw_alpha,
+    omega_total$omega.tot,
+    omega_total$omega_h
+  )
+) %>%
+  mutate(Estimate = round(Estimate, 3))
+
+knitr::kable(
+  reliability_table,
+  caption = "Reliability estimates for ADHD items"
+)
+```
+## two factor ADHD CFA
+```{r}
+dat_cfa_2factor <- dat_paper %>%
+  select(all_of(adhd_items)) %>%
+  drop_na() %>%
+  mutate(across(everything(), ordered))
+
+adhd_2factor_model <- '
+  Inattention =~ adhd1 + adhd2 + adhd3 + adhd4 +
+                 adhd7 + adhd8 + adhd9 + adhd10 + adhd11
+
+  HyperImp =~ adhd5 + adhd6 + adhd12 + adhd13 + adhd14 +
+              adhd15 + adhd16 + adhd17 + adhd18
+
+  Inattention ~~ HyperImp
+'
+
+fit_adhd_2factor <- cfa(
+  model = adhd_2factor_model,
+  data = dat_cfa_2factor,
+  ordered = adhd_items,
+  estimator = "WLSMV",
+  parameterization = "theta",
+  std.lv = TRUE
+)
+
+fit_2factor_table <- tibble(
+  Model = "Two-factor ADHD",
+  chisq = fitMeasures(fit_adhd_2factor, "chisq"),
+  df = fitMeasures(fit_adhd_2factor, "df"),
+  CFI = fitMeasures(fit_adhd_2factor, "cfi"),
+  TLI = fitMeasures(fit_adhd_2factor, "tli"),
+  RMSEA = fitMeasures(fit_adhd_2factor, "rmsea"),
+  SRMR = fitMeasures(fit_adhd_2factor, "srmr")
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+knitr::kable(
+  fit_2factor_table,
+  caption = "Two-factor ADHD CFA model fit"
+)
+```
+## comparison
+```{r}
+knitr::kable(
+  fit_2factor_table,
+  caption = "Two-factor ADHD CFA model fit"
+)
+
+adhd_2factor_model <- '
+  Inattention =~ adhd1 + adhd2 + adhd3 + adhd4 +
+                 adhd7 + adhd8 + adhd9 + adhd10 + adhd11
+
+  HyperImp =~ adhd5 + adhd6 + adhd12 + adhd13 + adhd14 +
+              adhd15 + adhd16 + adhd17 + adhd18
+
+  Inattention ~~ HyperImp
+'
+knitr::kable(
+  fit_2factor_table,
+  caption = "Two-factor ADHD CFA model fit"
+)
+## Figure 1. Two-factor CFA path diagram
+
+#| label: fig-cfa-path
+#| fig.cap: "Two-factor CFA measurement model for ADHD symptoms. Inattention and Hyperactivity/Impulsivity were modeled as correlated latent factors. Each factor loaded onto its corresponding ASRS-based observed items."
+#| fig.width: 9
+#| fig.height: 5
+#| fig.align: center
+#| message: false
+#| warning: false
+
+library(ggplot2)
+library(dplyr)
+library(grid)
+
+# Observed item positions
+items <- tibble(
+  factor = rep(c("Inattention", "Hyperactivity / Impulsivity"), each = 9),
+  item = c(
+    "adhd1", "adhd2", "adhd3", "adhd4", "adhd7", "adhd8", "adhd9", "adhd10", "adhd11",
+    "adhd5", "adhd6", "adhd12", "adhd13", "adhd14", "adhd15", "adhd16", "adhd17", "adhd18"
+  ),
+  x = rep(seq(-4, 4, length.out = 9), 2),
+  y = c(rep(1.1, 9), rep(-1.1, 9)),
+  latent_x = 0,
+  latent_y = c(rep(2.0, 9), rep(0.0, 9))
+)
+
+# Latent factor labels
+latent <- tibble(
+  name = c("Inattention", "Hyperactivity /\nImpulsivity"),
+  x = c(0, 0),
+  y = c(2.2, 0)
+)
+
+ggplot() +
+  # Factor loading arrows
+  geom_segment(
+    data = items,
+    aes(x = latent_x, y = latent_y, xend = x, yend = y + 0.18),
+    arrow = arrow(length = unit(0.12, "inches")),
+    linewidth = 0.35
+  ) +
+  
+  # Correlation between latent factors: two curved arrows
+  geom_curve(
+    aes(x = 0.55, y = 1.85, xend = 0.55, yend = 0.35),
+    curvature = -0.25,
+    arrow = arrow(length = unit(0.12, "inches")),
+    linewidth = 0.35
+  ) +
+  geom_curve(
+    aes(x = -0.55, y = 0.35, xend = -0.55, yend = 1.85),
+    curvature = -0.25,
+    arrow = arrow(length = unit(0.12, "inches")),
+    linewidth = 0.35
+  ) +
+  
+  # Observed item boxes
+  geom_label(
+    data = items,
+    aes(x = x, y = y, label = item),
+    fill = "white",
+    label.size = 0.30,
+    size = 3.2
+  ) +
+  
+  # Latent variable circles
+  annotate("point", x = 0, y = 2.2, shape = 21, size = 32, fill = "white", stroke = 0.8) +
+  annotate("text", x = 0, y = 2.2, label = "Inattention", size = 3.4) +
+  annotate("point", x = 0, y = 0, shape = 21, size = 32, fill = "white", stroke = 0.8) +
+  annotate("text", x = 0, y = 0, label = "Hyperactivity /\nImpulsivity", size = 3.1) +
+  
+  coord_cartesian(xlim = c(-4.8, 4.8), ylim = c(-1.6, 2.7), clip = "off") +
+  theme_void()
+```
+```
+## logistic regression
+```{r}
+dat_logit <- dat_paper %>%
+  mutate(
+    adhd_z = as.numeric(scale(adhd_total))
+  ) %>%
+  select(adhd_z, inter_majority) %>%
+  drop_na()
+
+m_inter_total <- glm(
+  inter_majority ~ adhd_z,
+  data = dat_logit,
+  family = binomial(link = "logit")
+)
+
+logit_table <- broom::tidy(
+  m_inter_total,
+  conf.int = TRUE,
+  exponentiate = FALSE
+) %>%
+  mutate(
+    OR = exp(estimate),
+    OR_low = exp(conf.low),
+    OR_high = exp(conf.high)
+  ) %>%
+  select(
+    Predictor = term,
+    B = estimate,
+    SE = std.error,
+    z = statistic,
+    p = p.value,
+    OR,
+    OR_low,
+    OR_high
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+knitr::kable(
+  logit_table,
+  caption = "Logistic regression predicting intersexual / ornament-like majority choice"
+)
+```
+
+## diagnostics table
+```{r}
+m_null <- glm(
+  inter_majority ~ 1,
+  data = dat_logit,
+  family = binomial(link = "logit")
+)
+
+lrt_table <- anova(m_null, m_inter_total, test = "Chisq")
+
+knitr::kable(
+  lrt_table,
+  caption = "Likelihood-ratio test comparing null model and ADHD_total model"
+)
+
+diagnostic_table <- tibble(
+  Diagnostic = c(
+    "Model convergence",
+    "Outcome type",
+    "Estimator",
+    "Multicollinearity"
+  ),
+  Result = c(
+    ifelse(m_inter_total$converged, "Converged", "Did not converge"),
+    "Binary outcome: inter_majority coded 0/1",
+    "Maximum likelihood estimation via glm() with binomial logit link",
+    "Not a concern because the focal model has one predictor"
+  )
+)
+
+knitr::kable(
+  diagnostic_table,
+  caption = "Model diagnostics and analytical choices"
+)
+```
+## group 
+```{r}
+#| message: false
+#| warning: false
+#| fig.width: 6
+#| fig.height: 4
+
+# Make sure ggplot2 is available
+library(ggplot2)
+
+# Create ADHD median-split group
+dat_group <- dat_paper %>%
+  mutate(
+    inter_majority_num = as.numeric(as.character(inter_majority)),
+    adhd_group = if_else(
+      adhd_total >= median(adhd_total, na.rm = TRUE),
+      "Higher ADHD group",
+      "Lower ADHD group"
+    )
+  ) %>%
+  filter(!is.na(inter_majority_num), !is.na(adhd_group))
+
+# Group summary with 95% CI
+group_summary <- dat_group %>%
+  group_by(adhd_group) %>%
+  summarise(
+    n = n(),
+    proportion = mean(inter_majority_num, na.rm = TRUE),
+    se = sqrt(proportion * (1 - proportion) / n),
+    lower = pmax(0, proportion - 1.96 * se),
+    upper = pmin(1, proportion + 1.96 * se),
+    .groups = "drop"
+  )
+
+# Table
+knitr::kable(
+  group_summary %>%
+    mutate(
+      proportion = round(proportion, 3),
+      se = round(se, 3),
+      lower = round(lower, 3),
+      upper = round(upper, 3)
+    ),
+  caption = "Descriptive group comparison with 95% confidence intervals"
+)
+
+# Plot
+ggplot(group_summary, aes(x = adhd_group, y = proportion)) +
+  geom_col(width = 0.60) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = function(x) paste0(round(x * 100), "%")
+  ) +
+  labs(
+    x = NULL,
+    y = "Intersexual / ornament-like majority choice",
+    title = "Intersexual choice by ADHD group"
+  ) +
+  theme_minimal()
+```
+
+
+
+
+
+
